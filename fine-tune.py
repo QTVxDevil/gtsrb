@@ -11,7 +11,8 @@ from dataloader.gtsrb_dataloader import GTSRB_load
 from models.resnet_stn import ResNetWithSTN
 from src.cfg import (BATCH, LR, GTSRB_NUM_CLASSES, DEVICE, WEIGHT_DECAY,
                      EPOCHS, EARLY_STOPPING_PARAMS, RESNET_FIGURE_PATH, IMAGE_SIZE,
-                     GTSRB_TRAINING_PATH, RESNET_CHECKPOINT_PATH, RESNET_CHECKPOINT_PATH_2)
+                     GTSRB_TRAINING_PATH, RESNET_CHECKPOINT_PATH, RESNET_CHECKPOINT_PATH_2, RESNET_CHECKPOINT_PATH_3,
+                     RESNET_CHECKPOINT_PATH_4)
 from src.earlystoping import EarlyStopping
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -27,86 +28,141 @@ def load_checkpoint(model, checkpoint_path, device):
 
         new_state_dict = {}
         for k, v in state_dict.items():
-            if "conv1." in k and "conv1_modified" not in k:
-                continue
-            if "bn1." in k and "bn1_modified" not in k:
-                continue
-            if "stn." in k:
-                continue
-            if "fc." in k:
-                continue
-            
-            if k.startswith("resnet."):
-                k = k[len("resnet."):]
-            
-            new_state_dict[k] = v
+            if checkpoint_path == RESNET_CHECKPOINT_PATH:
+                if "conv1." in k or "bn1." in k or "fc." in k:
+                    continue
+                
+                new_state_dict["resnet." + k] = v
+            else:
+                new_state_dict[k] = v
         
         try:
-            model.load_state_dict(new_state_dict, strict=False)
-            print(f"Loaded model weights from {checkpoint_path} (mismatched/skipped layers ignored).")
-        except Exception as e:
-            print(f"Error loading model state_dict: {e}")
+            strict_load = True if checkpoint_path == RESNET_CHECKPOINT_PATH_2 else False
+            model.load_state_dict(new_state_dict, strict=strict_load)
+            print(f"Loaded model weights from {checkpoint_path} (strict={strict_load}).")
+            if not strict_load:
+                print("Note: Some keys might be missing or unexpected due to architecture modifications (strict=False).")
+        except RuntimeError as e:
+            print(f"Error loading model state_dict from {checkpoint_path}: {e}")
+            print("This usually happens if module names in checkpoint do not exactly match model architecture.")
+            print("Attempting to load with partial matches...")
+            
+            model_state_dict = model.state_dict()
+            pretrained_dict = {k: v for k, v in new_state_dict.items() if k in model_state_dict and model_state_dict[k].shape == v.shape}
+            model_state_dict.update(pretrained_dict)
+            model.load_state_dict(model_state_dict)
+            print("Loaded partial model weights (mismatched/missing keys were skipped).")
+            raise RuntimeError(f"Failed to load checkpoint weights: {e}") # Bỏ comment nếu muốn dừng lại ngay khi có lỗi
             
     else:
-        print(f"No checkpoint found at {checkpoint_path}. Starting with pretrained ImageNet weights for ResNet backbone.")
-        
+        print(f"No checkpoint found at {checkpoint_path}. Starting with pretrained ImageNet weights for ResNet backbone (if applicable).")
+        print("WARNING: This might lead to sub-optimal results if this is not the first stage and no checkpoint was loaded.")
 
-def configure_optimizer(model, lr, weight_decay):
-    return optim.Adam([
-        {'params': model.conv1_modified.parameters(), 'lr': lr * 0.1},
-        {'params': model.bn1_modified.parameters(), 'lr': lr * 0.1},
-        {'params': model.stn.parameters(), 'lr': lr * 0.1},
-        {'params': model.fc.parameters(), 'lr': lr * 0.1}
-    ], weight_decay=WEIGHT_DECAY)
+def configure_optimizer(model, base_lr, weight_decay, unfreeze_resnet_layers=None, resnet_lr_multiplier=0.1):
+    if unfreeze_resnet_layers is None:
+        unfreeze_resnet_layers = []
+
+    for param in model.resnet.parameters():
+        param.requires_grad = False
+    
+    params_to_train = []
+
+    for param in model.stn.parameters():
+        param.requires_grad = True
+    params_to_train.append({'params': model.stn.parameters(), 'lr': base_lr})
+    print(f"Added STN parameters to optimizer with LR: {base_lr:.6f}")
+
+    for param in model.conv1_modified.parameters():
+        param.requires_grad = True
+    params_to_train.append({'params': model.conv1_modified.parameters(), 'lr': base_lr})
+    print(f"Added conv1_modified parameters to optimizer with LR: {base_lr:.6f}")
+    
+    for param in model.bn1_modified.parameters():
+        param.requires_grad = True
+    params_to_train.append({'params': model.bn1_modified.parameters(), 'lr': base_lr})
+    print(f"Added bn1_modified parameters to optimizer with LR: {base_lr:.6f}")
+
+    for param in model.fc.parameters():
+        param.requires_grad = True
+    params_to_train.append({'params': model.fc.parameters(), 'lr': base_lr})
+    print(f"Added fc parameters to optimizer with LR: {base_lr:.6f}")
+    
+    for layer_name in unfreeze_resnet_layers:
+        module = getattr(model.resnet, layer_name, None)
+        if module is not None:
+            for param in module.parameters():
+                param.requires_grad = True
+            
+            trainable_module_params = [p for p in module.parameters() if p.requires_grad]
+            if trainable_module_params:
+                params_to_train.append({'params': trainable_module_params, 'lr': base_lr * resnet_lr_multiplier})
+                print(f"Unfrozen and added to optimizer: resnet.{layer_name} with LR: {base_lr * resnet_lr_multiplier:.6f}")
+            else:
+                print(f"Warning: Layer 'resnet.{layer_name}' has no trainable parameters to add to optimizer.")
+        else:
+            print(f"Warning: Layer 'resnet.{layer_name}' not found in model.resnet for unfreezing.")
+
+    return optim.Adam(params_to_train, weight_decay=weight_decay)
 
 def print_optimizer_config(optimizer):
-    print("Starting fine-tuning with the following optimizer configuration:")
+    print("\n--- Optimizer configuration ---")
     for i, param_group in enumerate(optimizer.param_groups):
-        print(f"Param group {i}: Learning rate = {param_group['lr']}, Weight decay = {param_group.get('weight_decay', 0)}")
-        
+        print(f"  Param group {i}:")
+        print(f"    Learning rate = {param_group['lr']:.6f}")
+        print(f"    Number of parameters = {sum(p.numel() for p in param_group['params'])}")
+    print("-----------------------------\n")
+
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     running_loss = 0.0
-    correct = 0
-    total = 0
-    progress_bar = tqdm(dataloader, leave=True)
-    for images, labels in progress_bar:
-        images, labels = images.to(device), labels.to(device)
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item() * images.size(0)
-        _, predicted = outputs.max(1)
-        correct += predicted.eq(labels).sum().item()
-        total += labels.size(0)
-        
-        current_accuracy = 100.0 * correct / total if total > 0 else 0.0
-        current_loss = running_loss / total if total > 0 else 0.0
-        progress_bar.set_postfix(loss=f"{current_loss:.4f}", accuracy=f"{current_accuracy:.2f}%")
-        
-    avg_loss = running_loss / total
-    accuracy = correct / total
-    return avg_loss, accuracy
+    correct_predictions = 0
+    total_samples = 0
+
+    with tqdm(dataloader, desc="Training", unit="batch") as pbar:
+        for inputs, labels in pbar:
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * inputs.size(0)
+            _, predicted = torch.max(outputs.data, 1)
+            total_samples += labels.size(0)
+            correct_predictions += (predicted == labels).sum().item()
+            
+            pbar.set_postfix({'loss': loss.item()})
+
+    epoch_loss = running_loss / total_samples
+    epoch_accuracy = correct_predictions / total_samples
+    return epoch_loss, epoch_accuracy
 
 def validate(model, dataloader, criterion, device):
     model.eval()
     running_loss = 0.0
-    correct = 0
-    total = 0
+    correct_predictions = 0
+    total_samples = 0
+
     with torch.no_grad():
-        for images, labels in tqdm(dataloader, desc='Val', leave=False):
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            running_loss += loss.item() * images.size(0)
-            _, predicted = outputs.max(1)
-            correct += predicted.eq(labels).sum().item()
-            total += labels.size(0)
-    avg_loss = running_loss / total
-    accuracy = correct / total
-    return avg_loss, accuracy
+        with tqdm(dataloader, desc="Validation", unit="batch") as pbar:
+            for inputs, labels in pbar:
+                inputs, labels = inputs.to(device), labels.to(device)
+
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+                running_loss += loss.item() * inputs.size(0)
+                _, predicted = torch.max(outputs.data, 1)
+                total_samples += labels.size(0)
+                correct_predictions += (predicted == labels).sum().item()
+
+                pbar.set_postfix({'loss': loss.item()})
+
+    epoch_loss = running_loss / total_samples
+    epoch_accuracy = correct_predictions / total_samples
+    return epoch_loss, epoch_accuracy
 
 def main():
     torch.manual_seed(42)
@@ -121,25 +177,10 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=BATCH, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=BATCH, shuffle=False, num_workers=0)
 
-    model = ResNetWithSTN(num_classes=GTSRB_NUM_CLASSES, input_size=IMAGE_SIZE)
+    model = ResNetWithSTN(num_classes=GTSRB_NUM_CLASSES, stn_filters=(16, 32), stn_fc_units=128, input_size=IMAGE_SIZE)
     model = model.to(DEVICE)
 
-    load_checkpoint(model, RESNET_CHECKPOINT_PATH, DEVICE)
-
-    model.unfreeze_layers(layer_names=['conv1_modified', 'bn1_modified', 'stn', 'fc'])
-
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of trainable parameters: {trainable_params}")
-    
-    optimizer = configure_optimizer(model, LR, WEIGHT_DECAY)
-    print_optimizer_config(optimizer)
-    
-    optimizer = configure_optimizer(model, LR, WEIGHT_DECAY)
-    
     criterion = nn.CrossEntropyLoss()
-
-    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=LR * 0.001)
-
     early_stopper = EarlyStopping(
         patience=EARLY_STOPPING_PARAMS['patience'],
         delta=EARLY_STOPPING_PARAMS['delta'],
@@ -150,10 +191,62 @@ def main():
     val_losses = []
     train_accuracies = []
     val_accuracies = []
-    checkpoint_epoch = None
+    
+    # --- CẤU HÌNH CHO TỪNG GIAI ĐOẠN ---
+    # BẠN SẼ UNCOMMENT KHỐI CẤU HÌNH CỦA GIAI ĐOẠN MÀ BẠN MUỐN CHẠY
+    # VÀ ĐẢM BẢO CÁC KHỐI KHÁC ĐƯỢC COMMENT.
 
-    for epoch in range(EPOCHS):
-        print(f'Epoch {epoch+1}/{EPOCHS}')
+    # --- GIAI ĐOẠN 1 CẤU HÌNH: CHỈ HUẤN LUYỆN STN, conv1_modified, bn1_modified, FC ---
+    # current_stage_name = 'Stage 1: STN + Modified ResNet Head (conv1, bn1, fc)'
+    # unfreeze_layers_in_stage = []
+    # current_lr_multiplier = 1.0
+    # resnet_lr_multiplier_for_stage = 0.1
+    # checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH
+    # checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_2
+
+    # # --- GIAI ĐOẠN 2 CẤU HÌNH: THÊM LAYER4 + LAYER3 ---
+    # # Đây là giai đoạn bạn đang gặp vấn đề. Chạy lại với code đã sửa.
+    # current_stage_name = 'Stage 2: Add Layer4 + Layer3'
+    # unfreeze_layers_in_stage = ['layer4', 'layer3']
+    # current_lr_multiplier = 0.1
+    # resnet_lr_multiplier_for_stage = 0.1
+                                        
+    # checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH_2
+    # checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_3
+
+    # --- GIAI ĐOẠN 3 CẤU HÌNH: THÊM LAYER2 + LAYER1 (FULL FINE-TUNING) ---
+    current_stage_name = 'Stage 3: Add Layer2 + Layer1 (Full Fine-tuning)'
+    unfreeze_layers_in_stage = ['layer2', 'layer1'] # Mở băng layer2 và layer1
+    current_lr_multiplier = 0.01 # LR giảm 100 lần cho các lớp đã học
+    resnet_lr_multiplier_for_stage = 0.1 # LR multiplier cho ResNet layers (layer2, layer1 sẽ có LR = LR_global * 0.01 * 0.1 = LR_global * 0.001)
+    checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH_3 # Tải checkpoint từ giai đoạn 2
+    checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_4 # Cập nhật checkpoint sau giai đoạn này
+
+
+    print(f"\n--- Running: {current_stage_name} (Epochs: {EPOCHS}) ---")
+
+    load_checkpoint(model, checkpoint_to_load_for_this_stage, DEVICE)
+
+    optimizer = configure_optimizer(
+        model, 
+        LR * current_lr_multiplier,
+        WEIGHT_DECAY, 
+        unfreeze_resnet_layers=unfreeze_layers_in_stage,
+        resnet_lr_multiplier=resnet_lr_multiplier_for_stage
+    )
+    print_optimizer_config(optimizer)
+
+    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=(LR * current_lr_multiplier) * 0.001)
+
+    trainable_params_this_stage = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Number of trainable parameters for {current_stage_name}: {trainable_params_this_stage}")
+
+    best_val_accuracy = 0.0
+    best_epoch = 0
+    
+    for epoch_in_stage in range(EPOCHS):
+        print(f'\nEpoch {epoch_in_stage+1}/{EPOCHS} (Stage: {current_stage_name})')
+        
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, DEVICE)
         val_loss, val_acc = validate(model, val_loader, criterion, DEVICE)
         print(f'Train Loss: {train_loss:.4f} | Train Acc: {train_acc*100:.2f}%')
@@ -161,50 +254,51 @@ def main():
         
         train_losses.append(train_loss)
         val_losses.append(val_loss)
-        train_accuracies.append(train_acc)
-        val_accuracies.append(val_acc)
+        train_accuracies.append(train_acc * 100)
+        val_accuracies.append(val_acc * 100)
 
-        early_stopper(val_loss, model, RESNET_CHECKPOINT_PATH_2, val_accuracy=val_acc*100)
+        early_stopper(val_loss, model, checkpoint_to_save_after_stage, val_accuracy=val_acc*100)
         
+        if val_acc > best_val_accuracy:
+            best_val_accuracy = val_acc
+            best_epoch = epoch_in_stage + 1
+
         if early_stopper.early_stop:
             print('Early stopping triggered.')
-            checkpoint_epoch = epoch + 1
+            checkpoint_epoch = epoch_in_stage + 1
             break
-        
         scheduler.step()
 
-    if checkpoint_epoch is not None:
-        train_losses = train_losses[:checkpoint_epoch]
-        val_losses = val_losses[:checkpoint_epoch]
-        train_accuracies = train_accuracies[:checkpoint_epoch]
-        val_accuracies = val_accuracies[:checkpoint_epoch]
+    print(f"\n--- {current_stage_name} Finished ---")
+    print(f"Best model state for this stage saved to {checkpoint_to_save_after_stage}.")
 
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(range(1, len(train_losses) + 1), train_losses, label='Train Loss', marker='o', color='blue')
-    ax1.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss', marker='o', color='orange')
-    ax1.set_xlabel('Epochs')
-    ax1.set_ylabel('Loss', color='blue')
-    ax1.tick_params(axis='y', labelcolor='blue')
-    ax1.legend(loc='upper left')
-    ax1.grid(True)
+    plt.figure(figsize=(12, 6))
 
-    ax2 = ax1.twinx()
-    ax2.plot(range(1, len(train_accuracies) + 1), train_accuracies, label='Train Accuracy', marker='x', color='green')
-    ax2.plot(range(1, len(val_accuracies) + 1), val_accuracies, label='Validation Accuracy', marker='x', color='red')
-    ax2.set_ylabel('Accuracy', color='green')
-    ax2.tick_params(axis='y', labelcolor='green')
-    ax2.legend(loc='upper right')
+    plt.subplot(1, 2, 1)
+    plt.plot(range(1, len(train_losses) + 1), train_losses, label='Train Loss', marker='o', color='blue')
+    plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss', marker='o', color='orange')
+    plt.title(f'Training and Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
 
-    plt.title('Training and Validation Loss and Accuracy')
+    plt.subplot(1, 2, 2)
+    plt.plot(range(1, len(train_accuracies) + 1), train_accuracies, label='Train Accuracy', marker='x', color='green')
+    plt.plot(range(1, len(val_accuracies) + 1), val_accuracies, label='Validation Accuracy', marker='x', color='red')
+    plt.title(f'Training and Validation Accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
+    plt.grid(True)
+
     plt.tight_layout()
     
-    # Tạo thư mục figure nếu chưa có
     if not os.path.exists(RESNET_FIGURE_PATH):
         os.makedirs(RESNET_FIGURE_PATH)
 
-    plt.savefig(os.path.join(RESNET_FIGURE_PATH, 'training_history.png'))
+    plt.savefig(os.path.join(RESNET_FIGURE_PATH, f'training_history_{current_stage_name.replace(" ", "_").replace(":", "")}.png'))
     plt.show()
-
 
 if __name__ == '__main__':
     main()
