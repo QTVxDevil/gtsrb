@@ -5,8 +5,8 @@ from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from models.resnet50 import build_resnet50
-from src.cfg import BATCH, DEVICE, RESNET_CHECKPOINT_PATH, GTSRB_NUM_CLASSES, RESNET_FIGURE_PATH
+from models.resnet_stn import ResNetWithSTN
+from src.cfg import BATCH, DEVICE, RESNET_CHECKPOINT_PATH_4, GTSRB_NUM_CLASSES, RESNET_FIGURE_PATH, IMAGE_SIZE
 from dataloader.transform import get_transform
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,9 +32,9 @@ class GTSRBTestDataset(Dataset):
         return image, row['Filename']
 
 def test_gtsrb():
-    csv_path = r"datasets/GTSRB_Traffic_Sign/GTSRB_Final_Test_Images/GTSRB/Final_Test/GT-final_test.test.csv"
-    images_dir = r"datasets/GTSRB_Traffic_Sign/GTSRB_Final_Test_Images/GTSRB/Final_Test/Images"
-    ground_truth_path = r"datasets/GTSRB_Traffic_Sign/GTSRB_Final_Test_GT/GT-final_test.csv"
+    csv_path = r"D:\USTH_SUBJECTS\B3\project\gtsrb\datasets\GTSRB_Traffic_Sign\GTSRB_Final_Test_Images\GTSRB\Final_Test\GT-final_test.test.csv"
+    images_dir = r"D:\USTH_SUBJECTS\B3\project\gtsrb\datasets\GTSRB_Traffic_Sign\GTSRB_Final_Test_Images\GTSRB\Final_Test\Images"
+    ground_truth_path = r"D:\USTH_SUBJECTS\B3\project\gtsrb\datasets\GTSRB_Traffic_Sign\GTSRB_Final_Test_GT\GT-final_test.csv"
 
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
@@ -46,21 +46,20 @@ def test_gtsrb():
     test_dataset = GTSRBTestDataset(csv_path, images_dir, mode='val')
     test_loader = DataLoader(test_dataset, batch_size=BATCH, shuffle=False, num_workers=0)
 
-    model = build_resnet50(num_classes=GTSRB_NUM_CLASSES)
+    model = ResNetWithSTN(num_classes=GTSRB_NUM_CLASSES, input_size=IMAGE_SIZE)
     model = model.to(DEVICE)
-    if os.path.exists(RESNET_CHECKPOINT_PATH):
-        checkpoint = torch.load(RESNET_CHECKPOINT_PATH, map_location=DEVICE)
+    if os.path.exists(RESNET_CHECKPOINT_PATH_4):
+        checkpoint = torch.load(RESNET_CHECKPOINT_PATH_4, map_location=DEVICE)
         try:
             model.load_state_dict(checkpoint)
-            print(f"Loaded model weights from {RESNET_CHECKPOINT_PATH}")
+            print(f"Loaded model weights from {RESNET_CHECKPOINT_PATH_4}")
         except Exception as e:
             print(f"Error loading model state_dict: {e}")
             raise RuntimeError("Failed to load checkpoint weights")
     else:
-        raise FileNotFoundError(f"No checkpoint found at {RESNET_CHECKPOINT_PATH}")
+        raise FileNotFoundError(f"No checkpoint found at {RESNET_CHECKPOINT_PATH_4}")
     model.eval()
 
-    # Load ground truth
     ground_truth = pd.read_csv(ground_truth_path, sep=';')
     ground_truth = ground_truth.set_index('Filename')['ClassId'].to_dict()
 
@@ -78,7 +77,7 @@ def test_gtsrb():
             _, predicted = torch.max(outputs, 1)
             predictions.extend(predicted.cpu().numpy())
             filenames.extend(file_names)
-            # Collect incorrect predictions
+
             for i in range(len(file_names)):
                 if predicted[i].item() != ground_truth[file_names[i]]:
                     incorrect_images.append(images[i].cpu())
@@ -90,12 +89,10 @@ def test_gtsrb():
     accuracy = accuracy_score(correct_labels, predictions)
     print(f"Test Accuracy: {accuracy * 100:.2f}%")
 
-    # Calculate precision, recall, and F1-score
     report = classification_report(correct_labels, predictions, target_names=[f"Class {i}" for i in range(GTSRB_NUM_CLASSES)], output_dict=True)
     print("\nClassification Report:")
     print(classification_report(correct_labels, predictions, target_names=[f"Class {i}" for i in range(GTSRB_NUM_CLASSES)]))
 
-    # Calculate and display average precision, recall, and F1-score
     avg_precision = report['weighted avg']['precision']
     avg_recall = report['weighted avg']['recall']
     avg_f1 = report['weighted avg']['f1-score']
@@ -110,7 +107,7 @@ def test_gtsrb():
     plt.ylabel('True Labels')
     plt.title('Confusion Matrix')
 
-    cm_png_path = os.path.join(RESNET_FIGURE_PATH, "test_confusion_matrix.png")
+    cm_png_path = os.path.join(RESNET_FIGURE_PATH, "test_confusion_matrix_phase4.png")
     os.makedirs(RESNET_FIGURE_PATH, exist_ok=True)
     plt.savefig(cm_png_path)
     plt.close()
@@ -121,7 +118,7 @@ def test_gtsrb():
     print(f"Number of Correct Predictions: {num_correct}")
     print(f"Number of Incorrect Predictions: {num_incorrect}")
 
-    predictions_path = os.path.join(RESNET_FIGURE_PATH, "test_predictions_with_accuracy.csv")
+    predictions_path = os.path.join(RESNET_FIGURE_PATH, "test_predictions_with_accuracy_phase4.csv")
     os.makedirs(RESNET_FIGURE_PATH, exist_ok=True)
     predictions_df = pd.DataFrame({'Filename': filenames, 'Prediction': predictions, 'GroundTruth': correct_labels})
     predictions_df.to_csv(predictions_path, index=False)
@@ -138,7 +135,7 @@ def test_gtsrb():
             plt.axis('off')
         plt.tight_layout()
 
-        incorrect_png_path = os.path.join(RESNET_FIGURE_PATH, "incorrect_predictions.png")
+        incorrect_png_path = os.path.join(RESNET_FIGURE_PATH, "incorrect_predictions_phase4.png")
         plt.savefig(incorrect_png_path)
         plt.close()
         print(f"Incorrect predictions plot saved to {incorrect_png_path}")
