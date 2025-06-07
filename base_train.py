@@ -73,6 +73,13 @@ def main():
     model = build_resnet50(num_classes=GTSRB_NUM_CLASSES)
     model = model.to(DEVICE)
 
+    # Print parameter counts for the model being trained in this phase
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(model)
+    print(f"Total parameters: {total_params}")
+    print(f"Trainable parameters: {trainable_params}")
+
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
