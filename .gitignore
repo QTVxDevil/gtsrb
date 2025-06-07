@@ -1,9 +1,12 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
+# C extensions
 *.so
 
+# Distribution / packaging
 .Python
 env/
 build/
@@ -21,12 +24,11 @@ var/
 .installed.cfg
 *.egg
 
-*.manifest
-*.spec
-
+# Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Unit test / coverage reports
 htmlcov/
 .tox/
 .nox/
@@ -39,15 +41,20 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Jupyter Notebook
 .ipynb_checkpoints
 
-.python-version
+# PyCharm
+.idea/
 
+# VSCode
+.vscode/
+
+# MyPy
 .mypy_cache/
 .dmypy.json
 
-.vscode/
-
+# Data, logs, figures, and large files
 logs/
 figures/
 *.pth
@@ -62,9 +69,12 @@ figures/
 *.jpeg
 *.ppm
 
+# Datasets
 /datasets/
 
+# System files
 .DS_Store
 Thumbs.db
 
+# Notebook outputs
 notebook/
