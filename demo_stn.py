@@ -18,44 +18,34 @@ def unnormalize_image(tensor):
     return unnormalized_tensor
 
 def visualize_stn_transformation(model, original_images_batch, titles=None, save_path=None):
-    model.eval() # Set model to evaluation mode
+    model.eval()
     
     with torch.no_grad():
-        # 1. Pass original images through the initial layers of ResNetWithSTN
-        #    to get the feature map that would enter the STN.
         x_device = original_images_batch.to(DEVICE)
         
-        # Replicate the initial layers before STN in your ResNetWitSTN model
         x = model.conv1_modified(x_device)
         x = model.bn1_modified(x)
         x = model.relu_modified(x)
         x_pre_stn = model.maxpool_modified(x)
 
-        # 2. Get the theta matrix from the STN's localization network, operating on these features.
         theta = model.stn.localization_net(x_pre_stn)
-        
-        # 3. Apply this theta matrix to the *original input images* #    (not the feature maps) to visualize the transformation on the actual image.
-        # Ensure the grid generation uses the original image size as the target size.
+
         grid = F.affine_grid(theta, original_images_batch.size(), align_corners=False)
         transformed_images_for_viz = F.grid_sample(original_images_batch.to(DEVICE), grid, align_corners=False)
 
-    # Move tensors to CPU and un-normalize for plotting
     original_images_display = unnormalize_image(original_images_batch.cpu())
     transformed_images_display = unnormalize_image(transformed_images_for_viz.cpu())
 
     n = original_images_display.size(0)
-    
-    # Create the plot
-    plt.figure(figsize=(n * 3, 6)) # Adjust figure size based on number of images
+
+    plt.figure(figsize=(n * 3, 6))
 
     for i in range(n):
-        # Original Image
         plt.subplot(2, n, i + 1)
         img_np = original_images_display[i].permute(1, 2, 0).numpy()
         plt.imshow(img_np)
         plt.axis('off')
 
-        # Transformed Image
         plt.subplot(2, n, n + i + 1)
         timg_np = transformed_images_display[i].permute(1, 2, 0).numpy()
         plt.imshow(timg_np)
@@ -63,7 +53,6 @@ def visualize_stn_transformation(model, original_images_batch, titles=None, save
 
     plt.tight_layout()
     if save_path:
-        # Ensure directory exists
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
     plt.show()
@@ -71,12 +60,9 @@ def visualize_stn_transformation(model, original_images_batch, titles=None, save
 def demo_stn_on_training_images_trained_model():
     print(f"Using device: {DEVICE}")
 
-    # Initialize the model architecture
     model = ResNetWithSTN(num_classes=GTSRB_NUM_CLASSES, stn_filters=(16, 32),
                           stn_fc_units=128, input_size=IMAGE_SIZE)
-    
-    # Load the best trained checkpoint from your final training stage (e.g., Stage 3)
-    # This will load the learned weights for the STN and the rest of the model
+
     def load_checkpoint(model, checkpoint_path, device):
         if os.path.exists(checkpoint_path):
             checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -110,21 +96,13 @@ def demo_stn_on_training_images_trained_model():
     model.to(DEVICE)
     print("Trained ResNetWithSTN model loaded successfully.")
 
-    # Load a batch of images from the validation set (or training set without augmentation)
-    # Using 'val' mode for GTSRB_load ensures no random cropping/color jitter,
-    # giving a more consistent visual comparison.
     dataset = GTSRB_load(training_dir=GTSRB_TRAINING_PATH, mode='val') 
-    
-    # Select a few images to visualize. You might want to pick specific indices
-    # that are known to have rotations/translations to clearly show the STN's effect.
-    # For a general demo, random indices work.
+
     num_images_to_show = 5
-    # Let's try to get diverse examples or specific known problematic ones if you have them
+
     selected_indices = [
         np.random.randint(0, len(dataset)) for _ in range(num_images_to_show)
     ]
-    # Or manually pick specific indices that might show a good effect:
-    # selected_indices = [0, 150, 300, 450, 600] # Example indices, adjust based on your dataset
     
     sample_images = []
     titles = []
@@ -132,7 +110,7 @@ def demo_stn_on_training_images_trained_model():
         img_tensor, label = dataset[idx] 
         sample_images.append(img_tensor)
     
-    batch = torch.stack(sample_images) # This `batch` is already normalized by get_transform
+    batch = torch.stack(sample_images)
 
     print(f"Visualizing STN effect on {num_images_to_show} sample images...")
     visualize_stn_transformation(model, batch, titles=titles, save_path="figures/stn_trained_model_effect_demo.png")
@@ -140,7 +118,6 @@ def demo_stn_on_training_images_trained_model():
 
 
 if __name__ == '__main__':
-    # Ensure the figures directory exists
     if not os.path.exists("figures"):
         os.makedirs("figures")
     
