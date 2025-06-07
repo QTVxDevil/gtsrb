@@ -191,12 +191,8 @@ def main():
     val_losses = []
     train_accuracies = []
     val_accuracies = []
-    
-    # --- CẤU HÌNH CHO TỪNG GIAI ĐOẠN ---
-    # BẠN SẼ UNCOMMENT KHỐI CẤU HÌNH CỦA GIAI ĐOẠN MÀ BẠN MUỐN CHẠY
-    # VÀ ĐẢM BẢO CÁC KHỐI KHÁC ĐƯỢC COMMENT.
 
-    # --- GIAI ĐOẠN 1 CẤU HÌNH: CHỈ HUẤN LUYỆN STN, conv1_modified, bn1_modified, FC ---
+    # Phase 1 ---
     # current_stage_name = 'Stage 1: STN + Modified ResNet Head (conv1, bn1, fc)'
     # unfreeze_layers_in_stage = []
     # current_lr_multiplier = 1.0
@@ -204,23 +200,21 @@ def main():
     # checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH
     # checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_2
 
-    # # --- GIAI ĐOẠN 2 CẤU HÌNH: THÊM LAYER4 + LAYER3 ---
-    # # Đây là giai đoạn bạn đang gặp vấn đề. Chạy lại với code đã sửa.
+    # Phase 2 ---
     # current_stage_name = 'Stage 2: Add Layer4 + Layer3'
     # unfreeze_layers_in_stage = ['layer4', 'layer3']
     # current_lr_multiplier = 0.1
-    # resnet_lr_multiplier_for_stage = 0.1
-                                        
+    # resnet_lr_multiplier_for_stage = 0.1                   
     # checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH_2
     # checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_3
 
-    # --- GIAI ĐOẠN 3 CẤU HÌNH: THÊM LAYER2 + LAYER1 (FULL FINE-TUNING) ---
+    # Phase 3 ---
     current_stage_name = 'Stage 3: Add Layer2 + Layer1 (Full Fine-tuning)'
-    unfreeze_layers_in_stage = ['layer2', 'layer1'] # Mở băng layer2 và layer1
-    current_lr_multiplier = 0.01 # LR giảm 100 lần cho các lớp đã học
-    resnet_lr_multiplier_for_stage = 0.1 # LR multiplier cho ResNet layers (layer2, layer1 sẽ có LR = LR_global * 0.01 * 0.1 = LR_global * 0.001)
-    checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH_3 # Tải checkpoint từ giai đoạn 2
-    checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_4 # Cập nhật checkpoint sau giai đoạn này
+    unfreeze_layers_in_stage = ['layer2', 'layer1']
+    current_lr_multiplier = 0.01
+    resnet_lr_multiplier_for_stage = 0.1
+    checkpoint_to_load_for_this_stage = RESNET_CHECKPOINT_PATH_3
+    checkpoint_to_save_after_stage = RESNET_CHECKPOINT_PATH_4
 
 
     print(f"\n--- Running: {current_stage_name} (Epochs: {EPOCHS}) ---")
