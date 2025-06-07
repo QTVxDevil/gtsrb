@@ -3,24 +3,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class Localization(nn.Module):
-    def __init__(self, input_channels, filters_1, filters_2, fc_units, kernel_size=3, pool_size=2, image_size=(48, 48)):
+    def __init__(self, input_channels, filters_1, filters_2, fc_units, kernel_size=(3, 3), pool_size=(2, 2), image_size=24):
         super(Localization, self).__init__()
-        
+        self.pool_size = pool_size
+
         self.localization = nn.Sequential(
-            
-            nn.Conv2d(input_channels, filters_1, kernel_size=kernel_size, stride=1, padding=1),
+            nn.Conv2d(input_channels, filters_1, kernel_size=kernel_size, padding=1),
             nn.BatchNorm2d(filters_1),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(pool_size, stride=pool_size), 
-
-            nn.Conv2d(filters_1, filters_2, kernel_size=kernel_size, stride=1, padding=1),
+            nn.MaxPool2d(pool_size),
+            nn.Conv2d(filters_1, filters_2, kernel_size=kernel_size, padding=1),
             nn.BatchNorm2d(filters_2),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(pool_size, stride=pool_size), 
+            nn.MaxPool2d(pool_size),
         )
 
-        dummy_input_size = (1, input_channels, image_size, image_size)
-        dummy_input = torch.zeros(dummy_input_size)
+        dummy_input = torch.zeros(1, input_channels, image_size, image_size)
         with torch.no_grad():
             flattened_size = self.localization(dummy_input).view(1, -1).size(1)
 
@@ -39,12 +37,18 @@ class Localization(nn.Module):
         return theta
 
 class SpatialTransformer(nn.Module):
-    def __init__(self, input_channels, filters_1, filters_2, fc_units, image_size=48):
+    def __init__(self, input_channels, filters_1, filters_2, fc_units, image_size):
         super(SpatialTransformer, self).__init__()
-        self.localization_net = Localization(input_channels, filters_1, filters_2, fc_units, image_size=image_size)
+        self.localization_net = Localization(
+            input_channels=input_channels,
+            filters_1=filters_1,
+            filters_2=filters_2,
+            fc_units=fc_units,
+            image_size=image_size
+        )
 
     def forward(self, x):
         theta = self.localization_net(x)
-        grid = F.affine_grid(theta, x.size(), align_corners=True)
-        x = F.grid_sample(x, grid, align_corners=True)
+        grid = F.affine_grid(theta, x.size(), align_corners=False)
+        x = F.grid_sample(x, grid, align_corners=False)
         return x
