@@ -4,8 +4,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import numpy as np
 from dataloader.gtsrb_dataloader import GTSRB_load
-from models.resnet50 import build_resnet50
-from src.cfg import (GTSRB_NUM_CLASSES, DEVICE, GTSRB_TRAINING_PATH, IMAGE_SIZE, BATCH, RESNET_CHECKPOINT_PATH)
+from models.resnet_stn import ResNetWithSTN
+from src.cfg import (GTSRB_NUM_CLASSES, DEVICE, GTSRB_TRAINING_PATH, IMAGE_SIZE, BATCH, RESNET_CHECKPOINT_PATH_2)
 
 def evaluate(model, dataloader, device):
     model.eval()
@@ -29,13 +29,13 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=BATCH, shuffle=False, num_workers=0)
 
     # Load model
-    model = build_resnet50(num_classes=GTSRB_NUM_CLASSES)
-    model.load_state_dict(torch.load(RESNET_CHECKPOINT_PATH, map_location=DEVICE))
+    model = ResNetWithSTN(num_classes=GTSRB_NUM_CLASSES, input_size=IMAGE_SIZE)
+    model.load_state_dict(torch.load(RESNET_CHECKPOINT_PATH_2, map_location=DEVICE))
     model = model.to(DEVICE)
 
     # Evaluate
     accuracy, preds = evaluate(model, test_loader, DEVICE)
-    print(f'Test Accuracy: {accuracy*100:.2f}%')
+    print(f'Val Accuracy: {accuracy*100:.2f}%')
 
 if __name__ == '__main__':
     main()
